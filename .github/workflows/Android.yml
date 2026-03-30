@@ -32,7 +32,7 @@ jobs:
       - name: Download Whisper Model via Remote Script
         run: |
           curl -s https://raw.githubusercontent.com/ggerganov/whisper.cpp/master/models/download-ggml-model.sh | \
-          bash -s -- tiny app/src/main/assets/models
+          bash -s -- medium app/src/main/assets/models
 
       - name: Download Sample Audio (jfk.wav)
         run: |
