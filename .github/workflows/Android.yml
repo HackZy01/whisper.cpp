@@ -3,8 +3,6 @@ name: Build Whisper Android APK
 on:
   push:
     branches: [ "main", "master" ]
-  pull_request:
-    branches: [ "main", "master" ]
   workflow_dispatch:
 
 jobs:
@@ -25,34 +23,32 @@ jobs:
       - name: Setup Gradle
         uses: gradle/actions/setup-gradle@v3
 
+      # Ensure directories exist before the script runs
       - name: Create asset directories
         run: |
           mkdir -p app/src/main/assets/models
           mkdir -p app/src/main/assets/samples
 
-      - name: Download Whisper Model using Script
+      - name: Download Whisper Model via Remote Script
         run: |
-          # 1. Make the script executable
-          chmod +x ./download-ggml-model.sh
-          
-          # 2. Run the script. 
-          # Argument 1: The model name (e.g., tiny, base.en, small-q5_1)
-          # Argument 2: The output path we created in the previous step
-          ./download-ggml-model.sh medium app/src/main/assets/models
+          curl -s https://raw.githubusercontent.com/ggerganov/whisper.cpp/master/models/download-ggml-model.sh | \
+          bash -s -- tiny app/src/main/assets/models
 
       - name: Download Sample Audio (jfk.wav)
         run: |
-          echo "Downloading sample audio..."
           curl -L -o app/src/main/assets/samples/jfk.wav https://raw.githubusercontent.com/ggerganov/whisper.cpp/master/samples/jfk.wav
 
       - name: Grant execute permission for gradlew
         run: chmod +x gradlew
 
+      # Use 'assembleRelease' to generate the APK
       - name: Build Release APK
         run: ./gradlew assembleRelease
 
+      # Use a wildcard search to find the APK regardless of the subfolder name
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
           name: whisper-release-apk
-          path: app/build/outputs/apk/release/*.apk
+          path: "**/build/outputs/apk/release/*.apk"
+          if-no-files-found: error
