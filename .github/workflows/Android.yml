@@ -5,50 +5,53 @@ on:
     branches: [ "main", "master" ]
   workflow_dispatch:
 
+env:
+  # Opt-in to Node 24 now to satisfy the deprecation warning
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
 jobs:
   build:
-    name: Build Release APK
+    name: Build Whisper Android
     runs-on: ubuntu-latest
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v4 # Updated to v4
 
       - name: Set up JDK 17
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@v4 # Updated to v4
         with:
           java-version: '17'
           distribution: 'temurin'
 
       - name: Setup Gradle
-        uses: gradle/actions/setup-gradle@v3
+        uses: gradle/actions/setup-gradle@v4 # Updated to v4
 
-      # Ensure directories exist before the script runs
       - name: Create asset directories
         run: |
+          cd examples/whisper.android
           mkdir -p app/src/main/assets/models
           mkdir -p app/src/main/assets/samples
 
       - name: Download Whisper Model via Remote Script
         run: |
           curl -s https://raw.githubusercontent.com/ggerganov/whisper.cpp/master/models/download-ggml-model.sh | \
-          bash -s -- medium app/src/main/assets/models
+          bash -s -- tiny examples/whisper.android/app/src/main/assets/models
 
       - name: Download Sample Audio (jfk.wav)
         run: |
-          curl -L -o app/src/main/assets/samples/jfk.wav https://raw.githubusercontent.com/ggerganov/whisper.cpp/master/samples/jfk.wav
+          curl -L -o examples/whisper.android/app/src/main/assets/samples/jfk.wav https://raw.githubusercontent.com/ggerganov/whisper.cpp/master/samples/jfk.wav
 
       - name: Grant execute permission for gradlew
-        run: chmod +x gradlew
+        run: chmod +x examples/whisper.android/gradlew
 
-      # Use 'assembleRelease' to generate the APK
       - name: Build Release APK
+        working-directory: examples/whisper.android
         run: ./gradlew assembleRelease
 
-      # Use a wildcard search to find the APK regardless of the subfolder name
       - name: Upload APK
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v4 # Updated to v4
         with:
-          name: whisper-release-apk
-          path: "**/build/outputs/apk/release/*.apk"
+          name: whisper-android-release
+          path: "examples/whisper.android/app/build/outputs/apk/release/*.apk"
           if-no-files-found: error
