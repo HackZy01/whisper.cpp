@@ -3,6 +3,7 @@ package com.whispercppdemo.ui.main
 import android.app.Application
 import android.content.Context
 import android.media.MediaPlayer
+import android.net.Uri
 import android.util.Log
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -21,6 +22,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withContext
 import java.io.File
+import java.io.InputStream
 
 private const val LOG_TAG = "MainScreenViewModel"
 
@@ -32,9 +34,247 @@ class MainScreenViewModel(private val application: Application) : ViewModel() {
     var isRecording by mutableStateOf(false)
         private set
 
-    private val modelsPath = File(application.filesDir, "models")
+    private val modelsPath = File(application.getExternalFilesDir(null), "models")
     private val samplesPath = File(application.filesDir, "samples")
     private var recorder: Recorder = Recorder()
+    private var whisperContext: com.whispercpp.whisper.WhisperContext? = null
+    private var mediaPlayer: MediaPlayer? = null
+    private var recordedFile: File? = null
+
+    init {
+        viewModelScope.launch {
+            printSystemInfo()
+            loadData()
+        }
+    }
+
+    private suspend fun printSystemInfo() {
+        printMessage(String.format("System Info: %s\n", com.whispercpp.whisper.WhisperContext.getSystemInfo()))
+    }
+
+    private suspend fun loadData() {
+        printMessage("Loading data...\n")
+        try {
+            copyAssets()
+            loadBaseModel()
+            canTranscribe = true
+        } catch (e: Exception) {
+            Log.w(LOG_TAG, e)
+            printMessage("${e.localizedMessage}\n")
+        }
+    }
+
+    private suspend fun printMessage(msg: String) = withContext(Dispatchers.Main) {
+        dataLog += msg
+    }
+
+    private suspend fun copyAssets() = withContext(Dispatchers.IO) {
+        modelsPath.mkdirs()
+        samplesPath.mkdirs()
+        application.copyData("samples", samplesPath, ::printMessage)
+        printMessage("All data copied to working directory.\n")
+    }
+
+    private suspend fun loadBaseModel() = withContext(Dispatchers.IO) {
+        printMessage("Loading model...\n")
+        val models = application.assets.list("models/")
+        if (models != null && models.isNotEmpty()) {
+            whisperContext = com.whispercpp.whisper.WhisperContext.createContextFromAsset(
+                application.assets, 
+                "models/" + models[0]
+            )
+            printMessage("Loaded model ${models[0]}.\n")
+        } else {
+            printMessage("No bundled models found.\n")
+        }
+    }
+
+    fun loadExternalModel(uri: Uri) = viewModelScope.launch {
+        try {
+            printMessage("Loading external model...\n")
+            val modelFile = copyUriToModelsDir(uri)
+            loadModelFromFile(modelFile)
+        } catch (e: Exception) {
+            Log.w(LOG_TAG, e)
+            printMessage("Error loading model: ${e.localizedMessage}\n")
+        }
+    }
+
+    private suspend fun copyUriToModelsDir(uri: Uri): File = withContext(Dispatchers.IO) {
+        modelsPath.mkdirs()
+        val fileName = getFileNameFromUri(uri) ?: "model.bin"
+        val modelFile = File(modelsPath, fileName)
+        
+        application.contentResolver.openInputStream(uri)?.use { input ->
+            modelFile.outputStream().use { output ->
+                input.copyTo(output)
+            }
+        }
+        
+        val sizeMB = modelFile.length() / (1024 * 1024)
+        printMessage("Model saved: ${modelFile.absolutePath} (${sizeMB}MB)\n")
+        return@withContext modelFile
+    }
+
+    private suspend fun loadModelFromFile(modelFile: File) = withContext(Dispatchers.IO) {
+        try {
+            printMessage("Loading model from: ${modelFile.name}\n")
+            whisperContext?.release()
+            whisperContext = com.whispercpp.whisper.WhisperContext.createContextFromFile(modelFile.absolutePath)
+            canTranscribe = true
+            printMessage("Model loaded successfully!\n")
+        } catch (e: Exception) {
+            Log.w(LOG_TAG, e)
+            canTranscribe = false
+            printMessage("Failed to load model: ${e.localizedMessage}\n")
+        }
+    }
+
+    fun transcribeAudioFile(uri: Uri) = viewModelScope.launch {
+        try {
+            printMessage("Transcribing audio file...\n")
+            val audioFile = copyUriToCacheDir(uri)
+            val audioData = readAudioSamples(audioFile)
+            transcribeAudio(audioData)
+        } catch (e: Exception) {
+            Log.w(LOG_TAG, e)
+            printMessage("Error: ${e.localizedMessage}\n")
+        }
+    }
+
+    private suspend fun copyUriToCacheDir(uri: Uri): File = withContext(Dispatchers.IO) {
+        val fileName = getFileNameFromUri(uri) ?: "audio.wav"
+        val audioFile = File(application.cacheDir, fileName)
+        
+        application.contentResolver.openInputStream(uri)?.use { input ->
+            audioFile.outputStream().use { output ->
+                input.copyTo(output)
+            }
+        }
+        return@withContext audioFile
+    }
+
+    private fun getFileNameFromUri(uri: Uri): String? {
+        return if (uri.scheme == "content") {
+            application.contentResolver.query(uri, null, null, null, null)?.use { cursor ->
+                if (cursor.moveToFirst()) {
+                    val index = cursor.getColumnIndex(android.provider.OpenableColumns.DISPLAY_NAME)
+                    cursor.getString(index)
+                } else null
+            }
+        } else {
+            uri.path?.substring(uri.path!!.lastIndexOf('/') + 1)
+        }
+    }
+
+    fun benchmark() = viewModelScope.launch {
+        runBenchmark(6)
+    }
+
+    fun transcribeSample() = viewModelScope.launch {
+        transcribeAudio(getFirstSample())
+    }
+
+    private suspend fun runBenchmark(nthreads: Int) {
+        if (!canTranscribe) {
+            return
+        }
+
+        canTranscribe = false
+
+        printMessage("Running benchmark. This will take minutes...\n")
+        whisperContext?.benchMemory(nthreads)?.let{ printMessage(it) }
+        printMessage("\n")
+        whisperContext?.benchGgmlMulMat(nthreads)?.let{ printMessage(it) }
+
+        canTranscribe = true
+    }
+
+    private suspend fun getFirstSample(): File = withContext(Dispatchers.IO) {
+        samplesPath.listFiles()?.firstOrNull() ?: throw Exception("No sample files found")
+    }
+
+    private suspend fun readAudioSamples(file: File): FloatArray = withContext(Dispatchers.IO) {
+        stopPlayback()
+        startPlayback(file)
+        return@withContext decodeWaveFile(file)
+    }
+
+    private suspend fun stopPlayback() = withContext(Dispatchers.Main) {
+        mediaPlayer?.stop()
+        mediaPlayer?.release()
+        mediaPlayer = null
+    }
+
+    private suspend fun startPlayback(file: File) = withContext(Dispatchers.Main) {
+        mediaPlayer = MediaPlayer.create(application, file.absolutePath.toUri())
+        mediaPlayer?.start()
+    }
+
+    private suspend fun transcribeAudio(file: File) {
+        val audioData = readAudioSamples(file)
+        transcribeAudio(audioData)
+    }
+
+    private suspend fun transcribeAudio(data: FloatArray) {
+        if (!canTranscribe) {
+            return
+        }
+
+        canTranscribe = false
+
+        try {
+            printMessage("Transcribing data...\n")
+            val start = System.currentTimeMillis()
+            val text = whisperContext?.transcribeData(data)
+            val elapsed = System.currentTimeMillis() - start
+            printMessage("Done ($elapsed ms): \n$text\n")
+        } catch (e: Exception) {
+            Log.w(LOG_TAG, e)
+            printMessage("${e.localizedMessage}\n")
+        }
+
+        canTranscribe = true
+    }
+
+    fun toggleRecord() = viewModelScope.launch {
+        try {
+            if (isRecording) {
+                recorder.stopRecording()
+                isRecording = false
+                recordedFile?.let { transcribeAudio(it) }
+            } else {
+                recordedFile = File(samplesPath, "recording_${System.currentTimeMillis()}.wav")
+                recorder.startRecording(recordedFile!!)
+                isRecording = true
+            }
+        } catch (e: Exception) {
+            Log.w(LOG_TAG, e)
+            printMessage("${e.localizedMessage}\n")
+        }
+    }
+
+    override fun onCleared() {
+        super.onCleared()
+        viewModelScope.launch {
+            try {
+                stopPlayback()
+                whisperContext?.release()
+            } catch (e: Exception) {
+                Log.w(LOG_TAG, e)
+            }
+        }
+    }
+
+    companion object {
+        fun factory() = viewModelFactory {
+            initializer {
+                val application = this[ViewModelProvider.AndroidViewModelFactory.APPLICATION_KEY] as Application
+                MainScreenViewModel(application)
+            }
+        }
+    }
+}    private var recorder: Recorder = Recorder()
     private var whisperContext: com.whispercpp.whisper.WhisperContext? = null
     private var mediaPlayer: MediaPlayer? = null
     private var recordedFile: File? = null
