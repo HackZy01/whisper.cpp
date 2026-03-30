@@ -1,5 +1,6 @@
 package com.whispercppdemo.ui.main
 
+import android.net.Uri
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.*
@@ -18,6 +19,18 @@ import com.whispercppdemo.R
 
 @Composable
 fun MainScreen(viewModel: MainScreenViewModel) {
+    val modelPickerLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.GetContent()
+    ) { uri ->
+        uri?.let { viewModel.loadExternalModel(it) }
+    }
+
+    val audioPickerLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.GetContent()
+    ) { uri ->
+        uri?.let { viewModel.transcribeAudioFile(it) }
+    }
+
     MainScreen(
         canTranscribe = viewModel.canTranscribe,
         isRecording = viewModel.isRecording,
@@ -25,8 +38,8 @@ fun MainScreen(viewModel: MainScreenViewModel) {
         onBenchmarkTapped = viewModel::benchmark,
         onTranscribeSampleTapped = viewModel::transcribeSample,
         onRecordTapped = viewModel::toggleRecord,
-        onLoadModelTapped = viewModel::loadExternalModel,
-        onTranscribeFileTapped = viewModel::transcribeAudioFile
+        onLoadModelTapped = { modelPickerLauncher.launch("*/*") },
+        onTranscribeFileTapped = { audioPickerLauncher.launch("audio/*") }
     )
 }
 
@@ -39,23 +52,9 @@ private fun MainScreen(
     onBenchmarkTapped: () -> Unit,
     onTranscribeSampleTapped: () -> Unit,
     onRecordTapped: () -> Unit,
-    onLoadModelTapped: (android.net.Uri) -> Unit,
-    onTranscribeFileTapped: (android.net.Uri) -> Unit
+    onLoadModelTapped: () -> Unit,
+    onTranscribeFileTapped: () -> Unit
 ) {
-    val modelPickerLauncher = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.GetContent(),
-        onResult = { uri ->
-            uri?.let { onLoadModelTapped(it) }
-        }
-    )
-
-    val audioPickerLauncher = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.GetContent(),
-        onResult = { uri ->
-            uri?.let { onTranscribeFileTapped(it) }
-        }
-    )
-
     Scaffold(
         topBar = {
             TopAppBar(
@@ -75,8 +74,8 @@ private fun MainScreen(
                 }
                 
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
-                    LoadModelButton(onClick = { modelPickerLauncher.launch("*/*") }, modifier = Modifier.weight(1f))
-                    TranscribeFileButton(enabled = canTranscribe, onClick = { audioPickerLauncher.launch("audio/*") }, modifier = Modifier.weight(1f))
+                    LoadModelButton(onClick = onLoadModelTapped, modifier = Modifier.weight(1f))
+                    TranscribeFileButton(enabled = canTranscribe, onClick = onTranscribeFileTapped, modifier = Modifier.weight(1f))
                 }
                 
                 RecordButton(
@@ -156,83 +155,6 @@ private fun RecordButton(enabled: Boolean, isRecording: Boolean, onClick: () -> 
                 "Stop Recording"
             } else {
                 "Start Recording"
-            }
-        )
-    }
-}    onRecordTapped: () -> Unit
-) {
-    Scaffold(
-        topBar = {
-            TopAppBar(
-                title = { Text(stringResource(R.string.app_name)) }
-            )
-        },
-    ) { innerPadding ->
-        Column(
-            modifier = Modifier
-                .padding(innerPadding)
-                .padding(16.dp)
-        ) {
-            Column(verticalArrangement = Arrangement.SpaceBetween) {
-                Row(horizontalArrangement = Arrangement.SpaceBetween, modifier = Modifier.fillMaxWidth()) {
-                    BenchmarkButton(enabled = canTranscribe, onClick = onBenchmarkTapped)
-                    TranscribeSampleButton(enabled = canTranscribe, onClick = onTranscribeSampleTapped)
-                }
-                RecordButton(
-                    enabled = canTranscribe,
-                    isRecording = isRecording,
-                    onClick = onRecordTapped
-                )
-            }
-            MessageLog(messageLog)
-        }
-    }
-}
-
-@Composable
-private fun MessageLog(log: String) {
-    SelectionContainer {
-        Text(modifier = Modifier.verticalScroll(rememberScrollState()), text = log)
-    }
-}
-
-@Composable
-private fun BenchmarkButton(enabled: Boolean, onClick: () -> Unit) {
-    Button(onClick = onClick, enabled = enabled) {
-        Text("Benchmark")
-    }
-}
-
-@Composable
-private fun TranscribeSampleButton(enabled: Boolean, onClick: () -> Unit) {
-    Button(onClick = onClick, enabled = enabled) {
-        Text("Transcribe sample")
-    }
-}
-
-@OptIn(ExperimentalPermissionsApi::class)
-@Composable
-private fun RecordButton(enabled: Boolean, isRecording: Boolean, onClick: () -> Unit) {
-    val micPermissionState = rememberPermissionState(
-        permission = android.Manifest.permission.RECORD_AUDIO,
-        onPermissionResult = { granted ->
-            if (granted) {
-                onClick()
-            }
-        }
-    )
-    Button(onClick = {
-        if (micPermissionState.status.isGranted) {
-            onClick()
-        } else {
-            micPermissionState.launchPermissionRequest()
-        }
-     }, enabled = enabled) {
-        Text(
-            if (isRecording) {
-                "Stop recording"
-            } else {
-                "Start recording"
             }
         )
     }
